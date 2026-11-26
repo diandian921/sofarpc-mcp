@@ -52,6 +52,14 @@ func TestNewSkillEntryRejectsInvalidSkill(t *testing.T) {
 		"block scalar":          "---\nname: demo\ndescription: >\n  d\n---\n",
 		"indented key":          "---\nname: demo\n description: d\n---\n",
 		"frontmatter not first": "\n---\nname: demo\ndescription: d\n---\n",
+		"trailing comment":      "---\nname: demo\ndescription: d # note\n---\n",
+		"duplicate key":         "---\nname: demo\ndescription: d\ndescription: e\n---\n",
+		"boolean value":         "---\nname: demo\ndescription: true\n---\n",
+		"null value":            "---\nname: demo\ndescription: null\n---\n",
+		"numeric value":         "---\nname: demo\ndescription: 1.5\n---\n",
+		"nested mapping value":  "---\nname: demo\ndescription: a: b\n---\n",
+		"sequence value":        "---\nname: demo\ndescription: [a, b]\n---\n",
+		"invalid key":           "---\nname: demo\ndescription: d\n? x: y\n---\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -63,11 +71,11 @@ func TestNewSkillEntryRejectsInvalidSkill(t *testing.T) {
 }
 
 func TestParseSkillFrontmatterAcceptsCRLF(t *testing.T) {
-	fields, err := parseSkillFrontmatter([]byte("---\r\nname: demo\r\ndescription: a: b\r\n---\r\nbody\r\n"))
+	fields, err := parseSkillFrontmatter([]byte("---\r\nname: demo\r\ndescription: a/b (c), d\r\n---\r\nbody\r\n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if fields["name"] != "demo" || fields["description"] != "a: b" {
+	if fields["name"] != "demo" || fields["description"] != "a/b (c), d" {
 		t.Errorf("fields = %v", fields)
 	}
 }

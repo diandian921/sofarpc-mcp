@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1004,19 +1005,44 @@ func TestSkillsExtensionDeclared(t *testing.T) {
 	}
 }
 
-// TestRunStdioSkills drives skills/list and skills/get over the real stdio transport:
-// both describe the embedded skill with the digest and size of the bytes that
-// resources/read serves, and an unknown skill URI is an invalid-params error.
-func TestRunStdioSkills(t *testing.T) {
+// skillWireEntry is the wire shape of one skill in skills/list and skills/get.
+type skillWireEntry struct {
+	URI         string            `json:"uri"`
+	Frontmatter map[string]string `json:"frontmatter"`
+	Resources   []struct {
+		URI    string `json:"uri"`
+		Digest string `json:"digest"`
+		Size   int    `json:"size"`
+	} `json:"resources"`
+}
+
+// skillWireResponse decodes the responses the skills tests read off the stdio stream.
+type skillWireResponse struct {
+	ID     int `json:"id"`
+	Result struct {
+		ResultType   string           `json:"resultType"`
+		Skills       []skillWireEntry `json:"skills"`
+		Skill        *skillWireEntry  `json:"skill"`
+		TTLMs        *int             `json:"ttlMs"`
+		CacheScope   string           `json:"cacheScope"`
+		NextCursor   *string          `json:"nextCursor"`
+		Capabilities struct {
+			Extensions map[string]json.RawMessage `json:"extensions"`
+		} `json:"capabilities"`
+		Contents []struct {
+			Text string `json:"text"`
+		} `json:"contents"`
+	} `json:"result"`
+	Error *struct {
+		Code int `json:"code"`
+	} `json:"error"`
+}
+
+// runSkillFrames sends frames to a real stdio server and returns the responses by
+// id once want of them have arrived.
+func runSkillFrames(t *testing.T, frames []string, want int) map[int]skillWireResponse {
+	t.Helper()
 	t.Setenv("SOFARPC_HOME", t.TempDir())
-	frames := []string{
-		`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":1,"method":"skills/list","params":{}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"skills/get","params":{"uri":"skill://using-sofarpc/SKILL.md"}}`,
-		`{"jsonrpc":"2.0","id":3,"method":"skills/get","params":{"uri":"skill://missing/SKILL.md"}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"skill://using-sofarpc/SKILL.md"}}`,
-	}
 	inR, inW := io.Pipe()
 	out := &syncBuf{}
 	s := &Server{BuildVersion: "test", Stdin: inR, Stdout: out, Stderr: io.Discard, DisableConfigWrite: true}
@@ -1027,42 +1053,16 @@ func TestRunStdioSkills(t *testing.T) {
 			t.Fatalf("write frame: %v", err)
 		}
 	}
-
-	type skillEntry struct {
-		URI         string            `json:"uri"`
-		Frontmatter map[string]string `json:"frontmatter"`
-		Resources   []struct {
-			URI    string `json:"uri"`
-			Digest string `json:"digest"`
-			Size   int    `json:"size"`
-		} `json:"resources"`
-	}
-	type response struct {
-		ID     int `json:"id"`
-		Result struct {
-			ResultType string       `json:"resultType"`
-			Skills     []skillEntry `json:"skills"`
-			Skill      *skillEntry  `json:"skill"`
-			TTLMs      *int         `json:"ttlMs"`
-			CacheScope string       `json:"cacheScope"`
-			Contents   []struct {
-				Text string `json:"text"`
-			} `json:"contents"`
-		} `json:"result"`
-		Error *struct {
-			Code int `json:"code"`
-		} `json:"error"`
-	}
-	responses := map[int]response{}
+	responses := map[int]skillWireResponse{}
 	deadline := time.Now().Add(5 * time.Second)
-	for len(responses) < 5 {
+	for len(responses) < want {
 		if time.Now().After(deadline) {
 			_ = inW.Close()
 			t.Fatalf("timed out waiting for responses; got:\n%s", out.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 		for _, line := range strings.Split(out.String(), "\n") {
-			var r response
+			var r skillWireResponse
 			if json.Unmarshal([]byte(line), &r) == nil {
 				responses[r.ID] = r
 			}
@@ -1072,10 +1072,20 @@ func TestRunStdioSkills(t *testing.T) {
 	if code := <-done; code != 0 {
 		t.Fatalf("Run exit = %d", code)
 	}
+	return responses
+}
 
+// checkSkillResponses asserts the skills/list (id 1), skills/get (id 2) and
+// resources/read (id 4) responses agree: one complete, uncached, unpaginated skill
+// whose resource entry carries the digest and size of the served SKILL.md.
+func checkSkillResponses(t *testing.T, responses map[int]skillWireResponse) {
+	t.Helper()
+	if len(responses[4].Result.Contents) != 1 {
+		t.Fatalf("resources/read = %+v", responses[4])
+	}
 	body := responses[4].Result.Contents[0].Text
 	sum := sha256.Sum256([]byte(body))
-	checkEntry := func(label string, e skillEntry) {
+	checkEntry := func(label string, e skillWireEntry) {
 		t.Helper()
 		if e.URI != "skill://using-sofarpc/SKILL.md" || e.Frontmatter["name"] != "using-sofarpc" || e.Frontmatter["description"] == "" {
 			t.Errorf("%s: entry = %+v", label, e)
@@ -1090,18 +1100,61 @@ func TestRunStdioSkills(t *testing.T) {
 	}
 
 	list := responses[1].Result
-	if list.ResultType != "complete" || list.TTLMs == nil || list.CacheScope != "public" || len(list.Skills) != 1 {
+	if list.ResultType != "complete" || list.TTLMs == nil || *list.TTLMs != 0 || list.CacheScope != "public" {
 		t.Fatalf("skills/list result = %+v", list)
+	}
+	if len(list.Skills) != 1 || list.NextCursor != nil {
+		t.Fatalf("skills/list must return one unpaginated skill, got %+v", list)
 	}
 	checkEntry("skills/list", list.Skills[0])
 
 	get := responses[2].Result
-	if get.ResultType != "complete" || get.TTLMs == nil || get.CacheScope != "public" || get.Skill == nil {
+	if get.ResultType != "complete" || get.TTLMs == nil || *get.TTLMs != 0 || get.CacheScope != "public" || get.Skill == nil {
 		t.Fatalf("skills/get result = %+v", get)
 	}
 	checkEntry("skills/get", *get.Skill)
-
-	if e := responses[3].Error; e == nil || e.Code != -32602 {
-		t.Errorf("skills/get on an unknown uri: error = %+v, want code -32602", e)
+	if !reflect.DeepEqual(*get.Skill, list.Skills[0]) {
+		t.Errorf("skills/get entry %+v differs from skills/list entry %+v", *get.Skill, list.Skills[0])
 	}
+}
+
+// TestRunStdioSkills drives the skills methods over the real stdio transport after an
+// initialize handshake, including the invalid-params errors for an unknown skill URI,
+// a missing URI and a cursor the server never issued.
+func TestRunStdioSkills(t *testing.T) {
+	responses := runSkillFrames(t, []string{
+		`{"jsonrpc":"2.0","id":10,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":1,"method":"skills/list","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"skills/get","params":{"uri":"skill://using-sofarpc/SKILL.md"}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"skills/get","params":{"uri":"skill://missing/SKILL.md"}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"skill://using-sofarpc/SKILL.md"}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"skills/get","params":{}}`,
+		`{"jsonrpc":"2.0","id":6,"method":"skills/list","params":{"cursor":"stale"}}`,
+	}, 7)
+	checkSkillResponses(t, responses)
+	for _, id := range []int{3, 5, 6} {
+		if e := responses[id].Error; e == nil || e.Code != -32602 {
+			t.Errorf("request %d: error = %+v, want code -32602", id, e)
+		}
+	}
+}
+
+// TestRunStdioSkillsStatelessProtocol drives the same methods the way a 2026-07-28
+// client does: no initialize, the extension discovered through server/discover, and
+// every request carrying its protocol metadata.
+func TestRunStdioSkillsStatelessProtocol(t *testing.T) {
+	const meta = `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
+		`"io.modelcontextprotocol/clientInfo":{"name":"t","version":"0"},` +
+		`"io.modelcontextprotocol/clientCapabilities":{}}`
+	responses := runSkillFrames(t, []string{
+		`{"jsonrpc":"2.0","id":10,"method":"server/discover","params":{` + meta + `}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"skills/list","params":{` + meta + `}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"skills/get","params":{"uri":"skill://using-sofarpc/SKILL.md",` + meta + `}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"skill://using-sofarpc/SKILL.md",` + meta + `}}`,
+	}, 4)
+	if _, ok := responses[10].Result.Capabilities.Extensions["io.modelcontextprotocol/skills"]; !ok {
+		t.Errorf("server/discover does not declare the skills extension: %+v", responses[10].Result.Capabilities)
+	}
+	checkSkillResponses(t, responses)
 }
