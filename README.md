@@ -263,7 +263,9 @@ Input and output schemas are advisory host/LLM hints. Argument and business vali
 
 The `prompts` capability advertises one user-selected workflow, `sofarpc.invoke_workflow` (the host surfaces it as a slash command or template; it is never auto-executed). Given an `intent` (and optional `server`/`project`/`service`/`method`/`serviceQuery`), it renders the recommended resolve → describe → invoke_plan → invoke path with the failure-recovery contract.
 
-The `resources` capability exposes one read-only resource, `sofarpc://compatibility` — the Java/Hessian2 type support matrix as JSON. The config file itself is deliberately not exposed as a resource because it can carry credential-bearing attachments.
+The `resources` capability exposes two read-only resources: `sofarpc://compatibility` — the Java/Hessian2 type support matrix as JSON — and `skill://using-sofarpc/SKILL.md`, the bundled agent skill. The config file itself is deliberately not exposed as a resource because it can carry credential-bearing attachments.
+
+The server also declares the MCP Skills extension (`io.modelcontextprotocol/skills`) and answers `skills/list` and `skills/get`, so a host that supports the extension loads the `using-sofarpc` skill straight from the server, always matching the running binary (Claude Code lists it as `<server>:using-sofarpc`). For hosts without the extension, copy `skills/using-sofarpc/` into the host's skills directory instead; do not keep both, or the skill shows up twice.
 
 The config-write tools (`sofarpc_config_save_*`) accept `dryRun: true` to validate and preview an entry without writing `config.json`. Attachment values are stored verbatim in the local config (treat them as credentials) and are always redacted in tool/resource output. Start the server with `--disable-config-write` to drop all four config-write tools.
 

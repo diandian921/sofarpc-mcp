@@ -241,7 +241,9 @@ JSON-RPC 协议层使用官方 `modelcontextprotocol/go-sdk`(stdio 传输、生�
 
 `prompts` capability 声明了一个用户可选的工作流 `sofarpc.invoke_workflow`（host 把它作为 slash command 或模板展示，**绝不自动执行**）。给定 `intent`（以及可选的 `server`/`project`/`service`/`method`/`serviceQuery`），它渲染出推荐的 resolve → describe → invoke_plan → invoke 流程和失败恢复契约。
 
-`resources` capability 暴露一个只读 resource `sofarpc://compatibility` —— Java/Hessian2 类型支持矩阵(JSON)。config 文件本身有意**不**作为 resource 暴露,因为它可能带凭据 attachments。
+`resources` capability 暴露两个只读 resource:`sofarpc://compatibility` —— Java/Hessian2 类型支持矩阵(JSON),以及 `skill://using-sofarpc/SKILL.md` —— 随二进制自带的 agent skill。config 文件本身有意**不**作为 resource 暴露,因为它可能带凭据 attachments。
+
+server 同时声明 MCP Skills 扩展(`io.modelcontextprotocol/skills`)并响应 `skills/list` 和 `skills/get`:支持该扩展的 host 会直接从 server 加载 `using-sofarpc` skill,内容始终与运行中的二进制一致(Claude Code 里显示为 `<server>:using-sofarpc`)。不支持该扩展的 host,改为把 `skills/using-sofarpc/` 拷到 host 的 skills 目录;两者不要同时保留,否则 skill 会出现两份。
 
 写配置工具(`sofarpc_config_save_*`)支持 `dryRun: true`:校验并预览条目,但不写 `config.json`。attachment 的值原样存进本地 config(请按凭据对待),在工具 / resource 输出里始终脱敏。用 `--disable-config-write` 启动可去掉这四个写配置工具。
 

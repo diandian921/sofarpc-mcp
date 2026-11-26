@@ -3,6 +3,8 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -986,5 +988,120 @@ func TestSDKProbeWireShape(t *testing.T) {
 	}
 	if env.Error == nil || env.Error.NextTool == "" {
 		t.Errorf("failure should carry a recovery nextTool: %s", structured)
+	}
+}
+
+// TestSkillsExtensionDeclared pins that the server advertises the Skills extension
+// without losing the capabilities it advertises otherwise.
+func TestSkillsExtensionDeclared(t *testing.T) {
+	cs := connectSDK(t, true)
+	caps := cs.InitializeResult().Capabilities
+	if _, ok := caps.Extensions["io.modelcontextprotocol/skills"]; !ok {
+		t.Errorf("skills extension not declared: %+v", caps.Extensions)
+	}
+	if caps.Logging == nil || caps.Tools == nil || caps.Prompts == nil || caps.Resources == nil {
+		t.Errorf("a base capability is missing: %+v", caps)
+	}
+}
+
+// TestRunStdioSkills drives skills/list and skills/get over the real stdio transport:
+// both describe the embedded skill with the digest and size of the bytes that
+// resources/read serves, and an unknown skill URI is an invalid-params error.
+func TestRunStdioSkills(t *testing.T) {
+	t.Setenv("SOFARPC_HOME", t.TempDir())
+	frames := []string{
+		`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":1,"method":"skills/list","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"skills/get","params":{"uri":"skill://using-sofarpc/SKILL.md"}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"skills/get","params":{"uri":"skill://missing/SKILL.md"}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"skill://using-sofarpc/SKILL.md"}}`,
+	}
+	inR, inW := io.Pipe()
+	out := &syncBuf{}
+	s := &Server{BuildVersion: "test", Stdin: inR, Stdout: out, Stderr: io.Discard, DisableConfigWrite: true}
+	done := make(chan int, 1)
+	go func() { done <- s.Run() }()
+	for _, frame := range frames {
+		if _, err := io.WriteString(inW, frame+"\n"); err != nil {
+			t.Fatalf("write frame: %v", err)
+		}
+	}
+
+	type skillEntry struct {
+		URI         string            `json:"uri"`
+		Frontmatter map[string]string `json:"frontmatter"`
+		Resources   []struct {
+			URI    string `json:"uri"`
+			Digest string `json:"digest"`
+			Size   int    `json:"size"`
+		} `json:"resources"`
+	}
+	type response struct {
+		ID     int `json:"id"`
+		Result struct {
+			ResultType string       `json:"resultType"`
+			Skills     []skillEntry `json:"skills"`
+			Skill      *skillEntry  `json:"skill"`
+			TTLMs      *int         `json:"ttlMs"`
+			CacheScope string       `json:"cacheScope"`
+			Contents   []struct {
+				Text string `json:"text"`
+			} `json:"contents"`
+		} `json:"result"`
+		Error *struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	responses := map[int]response{}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(responses) < 5 {
+		if time.Now().After(deadline) {
+			_ = inW.Close()
+			t.Fatalf("timed out waiting for responses; got:\n%s", out.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+		for _, line := range strings.Split(out.String(), "\n") {
+			var r response
+			if json.Unmarshal([]byte(line), &r) == nil {
+				responses[r.ID] = r
+			}
+		}
+	}
+	_ = inW.Close()
+	if code := <-done; code != 0 {
+		t.Fatalf("Run exit = %d", code)
+	}
+
+	body := responses[4].Result.Contents[0].Text
+	sum := sha256.Sum256([]byte(body))
+	checkEntry := func(label string, e skillEntry) {
+		t.Helper()
+		if e.URI != "skill://using-sofarpc/SKILL.md" || e.Frontmatter["name"] != "using-sofarpc" || e.Frontmatter["description"] == "" {
+			t.Errorf("%s: entry = %+v", label, e)
+		}
+		if len(e.Resources) != 1 {
+			t.Fatalf("%s: resources = %+v", label, e.Resources)
+		}
+		r := e.Resources[0]
+		if r.URI != e.URI || r.Size != len(body) || r.Digest != "sha256:"+hex.EncodeToString(sum[:]) {
+			t.Errorf("%s: resource %+v does not describe the served SKILL.md", label, r)
+		}
+	}
+
+	list := responses[1].Result
+	if list.ResultType != "complete" || list.TTLMs == nil || list.CacheScope != "public" || len(list.Skills) != 1 {
+		t.Fatalf("skills/list result = %+v", list)
+	}
+	checkEntry("skills/list", list.Skills[0])
+
+	get := responses[2].Result
+	if get.ResultType != "complete" || get.TTLMs == nil || get.CacheScope != "public" || get.Skill == nil {
+		t.Fatalf("skills/get result = %+v", get)
+	}
+	checkEntry("skills/get", *get.Skill)
+
+	if e := responses[3].Error; e == nil || e.Code != -32602 {
+		t.Errorf("skills/get on an unknown uri: error = %+v, want code -32602", e)
 	}
 }

@@ -28,12 +28,16 @@ var serverInstructions = "Run sofarpc_resolve before sofarpc_invoke. When multip
 // Run/SelfTest cut over to this server in a later step, after which the old layers
 // are removed.
 func newSDKServer(appSvc *app.Service, version string, writeEnabled bool, stderr io.Writer) *mcpsdk.Server {
+	// Explicit capabilities replace the SDK defaults, so logging is restated here;
+	// tools, prompts and resources are still inferred from what gets registered.
+	capabilities := &mcpsdk.ServerCapabilities{Logging: &mcpsdk.LoggingCapabilities{}}
+	capabilities.AddExtension(tools.SkillsExtensionName, nil)
 	// Identity must match the legacy serverInfo so the initialize response does not
 	// change: same Name/Title/Version. Implementation.Description is left unset; the
 	// server description lives in the serverInstructions guidance instead.
 	srv := mcpsdk.NewServer(
 		&mcpsdk.Implementation{Name: "sofarpc-mcp", Title: "SofaRPC Direct Invoker", Version: version},
-		&mcpsdk.ServerOptions{Instructions: serverInstructions},
+		&mcpsdk.ServerOptions{Instructions: serverInstructions, Capabilities: capabilities},
 	)
 	tools.AddResolve(srv, appSvc, stderr)
 	tools.AddProbe(srv, appSvc, stderr)
@@ -50,5 +54,6 @@ func newSDKServer(appSvc *app.Service, version string, writeEnabled bool, stderr
 	}
 	tools.AddInvokeWorkflowPrompt(srv)
 	tools.AddCompatibilityResource(srv)
+	tools.AddSkills(srv)
 	return srv
 }
