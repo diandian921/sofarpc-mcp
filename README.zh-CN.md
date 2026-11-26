@@ -235,7 +235,7 @@ JSON-RPC 协议层使用官方 `modelcontextprotocol/go-sdk`(stdio 传输、生�
 
 `sofarpc mcp` 在 `initialize` 阶段协商 MCP protocol version，按新到旧声明：`2025-11-25`、`2025-06-18`、`2025-03-26`、`2024-11-05`。未知请求版本会降级到最新支持版本。在 `initialize` / `notifications/initialized` 握手前的请求会以 `-32002` 拒绝。
 
-声明的 capabilities：`tools`（静态列表）、`prompts`、`resources` 和 `logging`（`notifications/message`）。异步工具（`sofarpc_invoke`、`sofarpc_invoke_plan`、`sofarpc_probe`、`sofarpc_describe`、`sofarpc_doctor`）支持 `notifications/cancelled`（被取消的请求不会返回最终响应）。其中 `sofarpc_invoke`、`sofarpc_doctor` 和 `sofarpc_describe` 会在 client 提供 `progressToken` 时发出 `notifications/progress`（只接受 JSON string 或 integer）。
+声明的 capabilities：`tools`（静态列表）、`prompts` 和 `resources`。server 不发送 `notifications/message` 日志通知；诊断信息写到 stderr。异步工具（`sofarpc_invoke`、`sofarpc_invoke_plan`、`sofarpc_probe`、`sofarpc_describe`、`sofarpc_doctor`）支持 `notifications/cancelled`（被取消的请求不会返回最终响应）。其中 `sofarpc_invoke`、`sofarpc_doctor` 和 `sofarpc_describe` 会在 client 提供 `progressToken` 时发出 `notifications/progress`（只接受 JSON string 或 integer）。
 
 每个工具声明**各自的** `outputSchema`，描述其 `data` 的真实结构（而非仅统一信封）。较小的结果会以同一份 JSON 镜像到 `text` content block；超过 32 KiB 时，完整信封仍在 `structuredContent` 中，text block 会改为提示。input/output schema 是面向 host/LLM 的提示：参数与业务校验在 handler 中完成，并以 `app.Result` 信封（`isError` + 恢复用 `nextTool` / `recovery`）返回，绝不退化成 JSON-RPC protocol error；未知参数会以 invalid-arguments 信封拒绝。`sofarpc_invoke` 只接受声明的 `paramTypes` / `orderedArguments`（原 `types` / `args` 别名已移除）。
 

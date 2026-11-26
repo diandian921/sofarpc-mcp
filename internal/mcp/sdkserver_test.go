@@ -993,16 +993,23 @@ func TestSDKProbeWireShape(t *testing.T) {
 }
 
 // TestSkillsExtensionDeclared pins that the server advertises the Skills extension
-// without losing the capabilities it advertises otherwise.
+// next to the inferred tools, prompts and resources capabilities, and does not
+// advertise logging, which it never sends.
 func TestSkillsExtensionDeclared(t *testing.T) {
 	cs := connectSDK(t, true)
 	caps := cs.InitializeResult().Capabilities
 	if _, ok := caps.Extensions["io.modelcontextprotocol/skills"]; !ok {
 		t.Errorf("skills extension not declared: %+v", caps.Extensions)
 	}
-	//nolint:staticcheck // SA1019: asserts the logging capability the server still advertises.
-	if caps.Logging == nil || caps.Tools == nil || caps.Prompts == nil || caps.Resources == nil {
+	if caps.Tools == nil || caps.Prompts == nil || caps.Resources == nil {
 		t.Errorf("a base capability is missing: %+v", caps)
+	}
+	wire, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatalf("marshal capabilities: %v", err)
+	}
+	if strings.Contains(string(wire), `"logging"`) {
+		t.Errorf("logging capability must not be advertised: %s", wire)
 	}
 }
 
