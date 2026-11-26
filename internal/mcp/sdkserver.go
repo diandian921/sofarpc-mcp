@@ -30,6 +30,7 @@ var serverInstructions = "Run sofarpc_resolve before sofarpc_invoke. When multip
 func newSDKServer(appSvc *app.Service, version string, writeEnabled bool, stderr io.Writer) *mcpsdk.Server {
 	// Explicit capabilities replace the SDK defaults, so logging is restated here;
 	// tools, prompts and resources are still inferred from what gets registered.
+	//nolint:staticcheck // SA1019: logging stays advertised for clients on protocol revisions that still define it.
 	capabilities := &mcpsdk.ServerCapabilities{Logging: &mcpsdk.LoggingCapabilities{}}
 	capabilities.AddExtension(tools.SkillsExtensionName, nil)
 	// Identity must match the legacy serverInfo so the initialize response does not

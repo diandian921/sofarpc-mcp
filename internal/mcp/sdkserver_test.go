@@ -1000,6 +1000,7 @@ func TestSkillsExtensionDeclared(t *testing.T) {
 	if _, ok := caps.Extensions["io.modelcontextprotocol/skills"]; !ok {
 		t.Errorf("skills extension not declared: %+v", caps.Extensions)
 	}
+	//nolint:staticcheck // SA1019: asserts the logging capability the server still advertises.
 	if caps.Logging == nil || caps.Tools == nil || caps.Prompts == nil || caps.Resources == nil {
 		t.Errorf("a base capability is missing: %+v", caps)
 	}
