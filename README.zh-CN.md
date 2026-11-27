@@ -2,11 +2,13 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-![SofaRPC MCP 中文概览](docs/readme-hero.zh-CN.svg)
+![SofaRPC MCP 封面，深蓝背景上的代码符号](docs/readme-cover.jpg)
 
 面向 AI 智能体的 MCP-first SofaRPC 测试工具集。
 
 单个 `sofarpc` 二进制完成所有事情：安装/诊断命令（`sofarpc ping`、`sofarpc project`、`sofarpc server` 等）以及 stdio MCP server（`sofarpc mcp`，由 host 启动）。调用路径使用纯 Go 直连 BOLT/Hessian2 运行时，不需要 Java 进程或 sidecar。所有真实调用都通过 `sofarpc_invoke` MCP 工具暴露，不提供 CLI 调用命令。
+
+[调用链架构图](docs/readme-hero.zh-CN.svg)
 
 ## 安装后会有什么
 
@@ -35,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/diandian921/sofarpc-mcp/main/script
 & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/diandian921/sofarpc-mcp/main/scripts/install.ps1))) codex
 ```
 
-使用 `--version vX.Y.Z` 可以固定版本。如果不传 host 参数，只安装二进制并打印下一步。不传 `--version` 时，bootstrap 会跟随 GitHub 的 `releases/latest` redirect；下面的 Go 安装方式使用显式 release tag。
+使用 `--version vX.Y.Z`（PowerShell 中为 `-Version vX.Y.Z`）可以固定版本。省略 host 参数时，安装脚本只安装二进制并打印下一步。默认通过 GitHub 的 `releases/latest` 跳转选择最新正式版。要安装首次支持无状态 MCP 的预发行版，请指定 `v0.1.2-beta.3`。下文的 Go 安装方式需要显式指定发布标签。
 
 <details>
 <summary>替代方式：使用 Go</summary>
@@ -58,13 +60,13 @@ cd sofarpc-vX.Y.Z-darwin-arm64
 ```
 
 ```powershell
-Expand-Archive sofarpc-vX.Y.Z-windows-amd64.zip
+Expand-Archive -Path sofarpc-vX.Y.Z-windows-amd64.zip -DestinationPath .
 cd sofarpc-vX.Y.Z-windows-amd64
 .\sofarpc.exe install codex
 ```
 </details>
 
-`sofarpc install <host>` 会串起底层步骤：把二进制放到 `~/.sofarpc/bin/sofarpc`，运行 `sofarpc mcp --selftest`，然后注册到 host CLI。重复运行是安全的，也是升级路径。
+`sofarpc install <host>` 会安装二进制，运行 `sofarpc mcp --selftest`，然后通过 host CLI 注册服务。升级现有安装时，运行目标版本的安装程序并省略 host 参数。执行下文命令前，可以把安装目录中的 `bin` 加入 `PATH`，也可以使用二进制的绝对路径。
 
 构建完整平台矩阵的 release archives：
 
@@ -72,7 +74,7 @@ cd sofarpc-vX.Y.Z-windows-amd64
 ./scripts/package.sh
 ```
 
-每个 archive 都包含对应平台的 `sofarpc` 二进制、`README.md` 和 `docs/readme-hero.svg` 架构图；所有 archive 共用一个 `SHA256SUMS` 文件。从源码构建需要 Go 1.25+（MCP 层使用官方 `modelcontextprotocol/go-sdk`）。
+每个归档都包含对应平台的 `sofarpc` 二进制、`README.md`、`README.zh-CN.md`，以及 `docs/` 下的共用封面和中英文架构图。一个 `SHA256SUMS` 文件记录所有归档的校验和。从源码构建需要 Go 1.25+（MCP 层使用官方 `modelcontextprotocol/go-sdk`）。
 
 ## MCP 配置
 
@@ -85,7 +87,7 @@ sofarpc setup all --dry-run   # 预览准确命令，不修改任何内容
 
 `setup` 注册的是 `command = <root>/bin/sofarpc, args = ["mcp"]`（完全展开的绝对路径，绝不使用 `~`）。只有在 `SOFARPC_HOME` 非默认值时才会传递它，并且在修改 host 配置前会用 `sofarpc mcp --selftest` 验证二进制。
 
-重复运行的行为取决于 host：Codex 提供 `mcp get --json`，因此 setup 是精确幂等的（已有匹配 entry 就 no-op）；Claude 没有 JSON read-back，所以 setup 只保证存在性安全，不会静默覆盖已有 entry，必须传 `--force` 才能替换。
+对于 Codex，`setup` 会读取 `mcp get --json`。当已注册的命令匹配、参数包含 `mcp`，且需要设置的 `SOFARPC_HOME` 也匹配时，会跳过注册。替换不匹配的 Codex 条目或任何已存在的 Claude 条目时，需要传 `--force`。
 
 ## MCP 工具
 
@@ -103,7 +105,7 @@ MCP 暴露面刻意保持小而面向工作流：
 
 当 server 以 `--disable-config-write` 启动时，四个写配置工具不会注册。
 
-`sofarpc_probe` 只检查已配置的传输路径。它不能证明远端 interface、method 或业务行为一定存在。
+`sofarpc_probe` 检查已配置服务器地址或显式地址的 TCP 可达性。探测成功仅表示 TCP 可达。
 
 `sofarpc_invoke` 支持精确的底层参数：
 
@@ -198,10 +200,7 @@ sofarpc server list --json
 
 MCP server 只解析本地 Java 源码。它不会下载 Git repo、source jar、Maven 依赖，也不会加载项目 class。
 
-扫描根目录：
-
-- `src/main/java`
-- `*/src/main/java`
+扫描器会查找工作区根目录或嵌套模块中的 `src/main/java`，最深到 `workspaceRoot` 下第九级目录。如果 `workspaceRoot` 本身指向 `src/main/java`，扫描器会直接使用该目录。
 
 忽略：
 
@@ -223,7 +222,7 @@ Schema cache 存储在 `~/.sofarpc/cache/schema/` 下，并通过源码内容 fi
 - 请求编码尚未实现 object reference preservation；循环 request value 会被拒绝。
 - `java.util.Date` 请求值必须是 epoch millis 数字；日期/时间字符串会在 plan 阶段被拒绝，避免时区歧义。
 - 缺少 source schema 的 enum payload，以及 provider-specific Hessian extensions 的 Go 请求编码，在广泛依赖前还需要更多兼容性工作。Schema 已知的 enum 参数和 DTO field 已覆盖 Hessian oracle tests。
-- 常规 `result` 中 map keys 会扁平化为字符串；诊断时如果 key 类型很重要，请使用 `rawResult=true`。
+- Hessian2 Map 的键在解码阶段转为字符串，`result` 和 `rawResult` 都使用字符串键。不同键转换为相同字符串时可能发生覆盖。
 
 ## 安全边界
 
@@ -233,17 +232,31 @@ JSON-RPC 协议层使用官方 `modelcontextprotocol/go-sdk`(stdio 传输、生�
 
 ## MCP 兼容性
 
-`sofarpc mcp` 在 `initialize` 阶段协商 MCP protocol version，按新到旧声明：`2025-11-25`、`2025-06-18`、`2025-03-26`、`2024-11-05`。未知请求版本会降级到最新支持版本。在 `initialize` / `notifications/initialized` 握手前的请求会以 `-32002` 拒绝。
+`sofarpc mcp` 通过 stdio 支持两种 MCP 生命周期。无状态协议从 `v0.1.2-beta.3` 开始支持。
 
-声明的 capabilities：`tools`（静态列表）、`prompts` 和 `resources`。server 不发送 `notifications/message` 日志通知；诊断信息写到 stderr。异步工具（`sofarpc_invoke`、`sofarpc_invoke_plan`、`sofarpc_probe`、`sofarpc_describe`、`sofarpc_doctor`）支持 `notifications/cancelled`（被取消的请求不会返回最终响应）。其中 `sofarpc_invoke`、`sofarpc_doctor` 和 `sofarpc_describe` 会在 client 提供 `progressToken` 时发出 `notifications/progress`（只接受 JSON string 或 integer）。
+**无状态 MCP（`2026-07-28`）。** 启动 `sofarpc mcp`，将每条 JSON-RPC 消息作为一行写入 stdin，并以换行符结束。跳过 `initialize` 和 `notifications/initialized`。每个请求都要在 `params._meta` 中携带 `io.modelcontextprotocol/protocolVersion` 和 `io.modelcontextprotocol/clientCapabilities`。没有客户端能力需要声明时，填 `{}`。也可以通过 `io.modelcontextprotocol/clientInfo` 提供客户端信息。
 
-每个工具声明**各自的** `outputSchema`，描述其 `data` 的真实结构（而非仅统一信封）。较小的结果会以同一份 JSON 镜像到 `text` content block；超过 32 KiB 时，完整信封仍在 `structuredContent` 中，text block 会改为提示。input/output schema 是面向 host/LLM 的提示：参数与业务校验在 handler 中完成，并以 `app.Result` 信封（`isError` + 恢复用 `nextTool` / `recovery`）返回，绝不退化成 JSON-RPC protocol error；未知参数会以 invalid-arguments 信封拒绝。`sofarpc_invoke` 只接受声明的 `paramTypes` / `orderedArguments`（原 `types` / `args` 别名已移除）。
+用相同的元数据调用 `server/discover`，可以查询支持的协议版本和服务端能力。如果已知服务端支持 `2026-07-28`，可以直接把 `tools/list` 作为首个请求发送。 [MCP 发现规范](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+```
+
+**旧版 MCP（`2025-11-25` 及更早版本）。** 服务端仍可通过旧握手协商 `2025-11-25`、`2025-06-18`、`2025-03-26` 和 `2024-11-05`。先发送带协议版本的 `initialize`，收到响应后发送 `notifications/initialized`，再调用工具。通过 `initialize` 请求不支持的版本时，服务端会在响应中返回 `2025-11-25`。
+
+如果首个请求是未携带无状态协议元数据的 `tools/list`，当前 Go SDK 会拒绝该请求，JSON-RPC `error.code` 为 `0`，错误消息为 `method "tools/list" is invalid during session initialization`。
+
+服务端声明的能力包括 `tools`（静态列表）、`prompts` 和 `resources`。诊断信息写入 stderr。SDK 会将 `notifications/cancelled` 传递到请求处理器的上下文。客户端提供 `params._meta.progressToken` 时，`sofarpc_invoke`、`sofarpc_doctor` 和 `sofarpc_describe` 会发出 `notifications/progress`。请使用 JSON 字符串或整数作为 token。
+
+每个工具的 `outputSchema` 描述其 `data` 结构。较小的结果会以同一份 JSON 镜像到 `text` content block。超过 32 KiB 时，完整信封仍在 `structuredContent` 中，text block 会改为提示。响应的 `_meta` 总是包含 `elapsedMs`，并在有值时包含 `summary` 和 `requestId`。
+
+输入和输出 schema 为 host 和 LLM 提供参考。工具处理器通过 `app.Result` 信封返回参数或业务校验失败（`isError` 以及 `nextTool` / `recovery` 恢复信息）。例如，`tools/call` 的工具参数中包含未知字段时，会收到 invalid-arguments 信封。`tools/call` 的协议参数无效或工具名称未知时，会收到 JSON-RPC 错误。`sofarpc_invoke` 只接受声明的 `paramTypes` / `orderedArguments`（原 `types` / `args` 别名已移除）。
 
 `prompts` capability 声明了一个用户可选的工作流 `sofarpc.invoke_workflow`（host 把它作为 slash command 或模板展示，**绝不自动执行**）。给定 `intent`（以及可选的 `server`/`project`/`service`/`method`/`serviceQuery`），它渲染出推荐的 resolve → describe → invoke_plan → invoke 流程和失败恢复契约。
 
 `resources` capability 暴露两个只读 resource:`sofarpc://compatibility` —— Java/Hessian2 类型支持矩阵(JSON),以及 `skill://using-sofarpc/SKILL.md` —— 随二进制自带的 agent skill。config 文件本身有意**不**作为 resource 暴露,因为它可能带凭据 attachments。
 
-server 同时声明 MCP Skills 扩展(`io.modelcontextprotocol/skills`)并响应 `skills/list` 和 `skills/get`:支持该扩展的 host 会直接从 server 加载 `using-sofarpc` skill,内容始终与运行中的二进制一致(Claude Code 里显示为 `<server>:using-sofarpc`)。不支持该扩展的 host,改为把 `skills/using-sofarpc/` 拷到 host 的 skills 目录;两者不要同时保留,否则 skill 会出现两份。
+服务端同时声明 MCP Skills 扩展（`io.modelcontextprotocol/skills`），并响应 `skills/list` 和 `skills/get`。支持该扩展的 host 会直接从服务端加载 `using-sofarpc`，内容与运行中的二进制一致（Claude Code 中显示为 `<server>:using-sofarpc`）。其他 host 可以从仓库中与二进制版本匹配的标签下复制 `skills/using-sofarpc/` 到自己的 skills 目录。若两种方式同时启用，该 skill 会出现两份。
 
 写配置工具(`sofarpc_config_save_*`)支持 `dryRun: true`:校验并预览条目,但不写 `config.json`。attachment 的值原样存进本地 config(请按凭据对待),在工具 / resource 输出里始终脱敏。用 `--disable-config-write` 启动可去掉这四个写配置工具。
 

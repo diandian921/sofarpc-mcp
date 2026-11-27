@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Cross-compile the release matrix and emit OS-appropriate archives plus a
 # single SHA256SUMS. tar.gz for macOS/Linux (preserves the executable bit);
-# zip for Windows (native). Each archive carries the single sofarpc binary,
-# README.md, and its README hero SVG — the user just runs
-# `./sofarpc install <host>` directly. The network bootstrap
+# zip for Windows (native). Each archive carries the sofarpc binary and the
+# English and Chinese READMEs with their cover and architecture diagrams. Run
+# `./sofarpc install <host>` from the extracted directory. The network bootstrap
 # (scripts/install.{sh,ps1}) is served from raw.githubusercontent.com and not
 # shipped inside archives.
 set -euo pipefail
@@ -54,9 +54,12 @@ for platform in $PLATFORMS; do
     (cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS="$GOOS_VALUE" GOARCH="$GOARCH_VALUE" \
         go build -ldflags "-X main.BuildVersion=$VERSION" -o "$WORK_DIR/sofarpc$EXT" ./cmd/sofarpc)
 
-    cp "$REPO_ROOT/README.md" "$WORK_DIR/README.md"
+    cp "$REPO_ROOT/README.md" "$REPO_ROOT/README.zh-CN.md" "$WORK_DIR/"
     mkdir -p "$WORK_DIR/docs"
-    cp "$REPO_ROOT/docs/readme-hero.svg" "$WORK_DIR/docs/readme-hero.svg"
+    cp "$REPO_ROOT/docs/readme-cover.jpg" \
+        "$REPO_ROOT/docs/readme-hero.svg" \
+        "$REPO_ROOT/docs/readme-hero.zh-CN.svg" \
+        "$WORK_DIR/docs/"
 
     base="sofarpc-$VERSION-$GOOS_VALUE-$GOARCH_VALUE"
     if [ "$GOOS_VALUE" = "windows" ]; then

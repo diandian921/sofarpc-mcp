@@ -2,11 +2,13 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-![SofaRPC MCP overview](docs/readme-hero.svg)
+![SofaRPC MCP cover with a blue code symbol](docs/readme-cover.jpg)
 
 MCP-first SofaRPC testing toolkit for agents.
 
 A single binary `sofarpc` does everything: setup/diagnostic commands (`sofarpc ping`, `sofarpc project`, `sofarpc server`, ...) and the stdio MCP server (`sofarpc mcp`, which is what hosts launch). Invocation runs through a pure-Go direct BOLT/Hessian2 runtime; no Java process or sidecar is required. All invocation is exposed as the `sofarpc_invoke` MCP tool, not a CLI command.
+
+[Architecture overview](docs/readme-hero.svg)
 
 ## What Gets Installed
 
@@ -37,10 +39,12 @@ curl -fsSL https://raw.githubusercontent.com/diandian921/sofarpc-mcp/main/script
 & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/diandian921/sofarpc-mcp/main/scripts/install.ps1))) codex
 ```
 
-Pin a release with `--version vX.Y.Z`. Without a host argument it installs
-the binary only and prints the next step. Without `--version`, the bootstrap
-follows GitHub's `releases/latest` redirect; the Go install alternative uses
-an explicit release tag.
+Pin a release with `--version vX.Y.Z` (`-Version vX.Y.Z` in PowerShell).
+Without a host argument, the bootstrap installs the binary only and prints
+the next step. By default, it follows GitHub's `releases/latest` redirect to
+the latest stable release. To install the first prerelease with stateless
+MCP support, pin `v0.1.2-beta.3`. The Go install alternative uses an explicit
+release tag.
 
 <details>
 <summary>Alternative: with Go</summary>
@@ -63,15 +67,17 @@ cd sofarpc-vX.Y.Z-darwin-arm64
 ```
 
 ```powershell
-Expand-Archive sofarpc-vX.Y.Z-windows-amd64.zip
+Expand-Archive -Path sofarpc-vX.Y.Z-windows-amd64.zip -DestinationPath .
 cd sofarpc-vX.Y.Z-windows-amd64
 .\sofarpc.exe install codex
 ```
 </details>
 
-`sofarpc install <host>` chains the lower-level steps (place the binary at
-`~/.sofarpc/bin/sofarpc`, run `sofarpc mcp --selftest`, then register with
-the host CLI). Running it again is safe and is the upgrade path.
+`sofarpc install <host>` installs the binary, runs `sofarpc mcp --selftest`,
+and registers the server with the host CLI. To upgrade an existing installation,
+run the installer for the desired version and omit the host argument. For the
+commands below, add the installed `bin` directory to `PATH` or use the binary's
+absolute path.
 
 Build release archives for the full platform matrix:
 
@@ -79,10 +85,10 @@ Build release archives for the full platform matrix:
 ./scripts/package.sh
 ```
 
-Each archive contains the platform `sofarpc` binary, `README.md`, and the
-`docs/readme-hero.svg` architecture image; a single
-`SHA256SUMS` file covers all archives. Requirements: Go 1.25+ when building
-from source (the MCP layer uses the official `modelcontextprotocol/go-sdk`).
+Each archive contains the platform `sofarpc` binary, `README.md`, and
+`README.zh-CN.md`. The shared cover and both architecture diagrams are in
+`docs/`. A single `SHA256SUMS` file covers all archives. Building from source
+requires Go 1.25+ (the MCP layer uses the official `modelcontextprotocol/go-sdk`).
 
 ## MCP Configuration
 
@@ -96,11 +102,10 @@ sofarpc setup all --dry-run   # preview the exact commands, mutate nothing
 `setup` registers `command = <root>/bin/sofarpc, args = ["mcp"]` (fully
 expanded absolute path, never `~`), propagates `SOFARPC_HOME` only when it
 is non-default, and verifies the binary with `sofarpc mcp --selftest` before
-touching host config. Re-run
-behavior is host-dependent: Codex exposes `mcp get --json` so setup is
-exactly idempotent (matching entry → no-op); Claude has no JSON read-back, so
-setup is existence-safe — it will not silently overwrite an existing entry and
-requires `--force` to replace one.
+touching host config. With Codex, `setup` reads `mcp get --json` and skips
+registration when the command matches, the arguments contain `mcp`, and any
+requested `SOFARPC_HOME` matches. Replacing a differing Codex entry or any
+existing Claude entry requires `--force`.
 
 ## MCP Tools
 
@@ -118,7 +123,7 @@ The MCP surface is intentionally small and workflow-oriented:
 
 The four config-write tools are not registered when the server is started with `--disable-config-write`.
 
-`sofarpc_probe` checks the configured transport path. It does not prove the remote interface, method, or business behavior exists.
+`sofarpc_probe` checks TCP reachability at a configured server address or an explicitly supplied address. A successful probe establishes only TCP reachability.
 
 `sofarpc_invoke` supports either exact low-level arguments:
 
@@ -218,10 +223,7 @@ The `ping` command emits the same structured result contract the MCP tools retur
 
 The MCP server parses local Java source only. It does not download Git repos, source jars, Maven dependencies, or load project classes.
 
-Scanned roots:
-
-- `src/main/java`
-- `*/src/main/java`
+The scanner discovers `src/main/java` at the workspace root and in nested modules, up to nine directory levels below `workspaceRoot`. If `workspaceRoot` itself points to a `src/main/java` directory, the scanner uses it directly.
 
 Ignored:
 
@@ -243,7 +245,7 @@ Known limits:
 - object reference preservation is not implemented for request encoding; cyclic request values are rejected.
 - `java.util.Date` request values must be epoch millis numbers; date/time strings are rejected during planning to avoid timezone ambiguity.
 - Go request encoding for enum payloads without source schema and provider-specific Hessian extensions needs more compatibility work before relying on them broadly. Schema-known enum parameters and DTO fields are covered by Hessian oracle tests.
-- map keys are flattened to strings in the normal `result`; use `rawResult=true` when key type matters during diagnosis.
+- Hessian2 map keys become strings during decoding, so both `result` and `rawResult` use string keys. Keys that stringify to the same value can collide.
 
 ## Security Boundaries
 
@@ -253,19 +255,31 @@ The JSON-RPC protocol layer is the official `modelcontextprotocol/go-sdk` (stdio
 
 ## MCP Compliance
 
-`sofarpc mcp` negotiates the MCP protocol version at `initialize`, advertising (newest first): `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`. An unknown requested version degrades to the newest supported version. Requests before the `initialize` / `notifications/initialized` handshake are rejected with `-32002`.
+`sofarpc mcp` supports both MCP lifecycles over stdio. The stateless lifecycle is available starting with `v0.1.2-beta.3`.
 
-Declared capabilities: `tools` (static list), `prompts`, and `resources`. The server sends no `notifications/message` log notifications; diagnostics go to stderr. The async tools (`sofarpc_invoke`, `sofarpc_invoke_plan`, `sofarpc_probe`, `sofarpc_describe`, `sofarpc_doctor`) honor `notifications/cancelled` (a cancelled request receives no final response). Of these, `sofarpc_invoke`, `sofarpc_doctor`, and `sofarpc_describe` emit `notifications/progress` when the client supplies a `progressToken` (accepted only as a JSON string or integer).
+**Stateless MCP (`2026-07-28`).** Start `sofarpc mcp` and send each JSON-RPC message as a newline-terminated line on stdin. Skip `initialize` and `notifications/initialized`. Each request must carry `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in `params._meta`. Use `{}` for client capabilities if you have none to declare. You can also include `io.modelcontextprotocol/clientInfo` to identify your client.
+
+Call `server/discover` with the same metadata to query supported versions and server capabilities. If you already know the server supports `2026-07-28`, you can send `tools/list` as the first request. [MCP discovery specification](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+```
+
+**Legacy MCP (`2025-11-25` and earlier).** The server still accepts `2025-11-25`, `2025-06-18`, `2025-03-26`, and `2024-11-05` via the legacy handshake. Send `initialize` with the requested protocol version, wait for the response, then send `notifications/initialized` before calling tools. For an unsupported version requested through `initialize`, the server returns `2025-11-25` in the response.
+
+If the first request is `tools/list` without the stateless metadata, the current Go SDK rejects it with JSON-RPC `error.code` set to `0` and the message `method "tools/list" is invalid during session initialization`.
+
+Declared capabilities include `tools` (static list), `prompts`, and `resources`. Diagnostics go to stderr. The SDK propagates `notifications/cancelled` to the request handler's context. `sofarpc_invoke`, `sofarpc_doctor`, and `sofarpc_describe` emit `notifications/progress` when the client supplies `params._meta.progressToken`. Use a JSON string or integer for the token.
 
 Every tool declares a per-tool `outputSchema` that describes the shape of its own `data` (not just the shared envelope). Small results are mirrored as the same JSON in a `text` content block; for results larger than 32 KiB, the full envelope remains in `structuredContent` and the text block becomes a pointer. `_meta.elapsedMs` is always present; `_meta.summary` and `requestId` are included when available.
 
-Input and output schemas are advisory host/LLM hints. Argument and business validation run in the handler and surface as the `app.Result` envelope (`isError` plus a recovery `nextTool` / `recovery`), never as a JSON-RPC protocol error; an unknown argument is rejected as an invalid-arguments envelope. `sofarpc_invoke` accepts only the advertised `paramTypes` / `orderedArguments` names — the former `types` / `args` aliases were removed.
+Input and output schemas guide hosts and LLMs. Tool handlers report argument and business validation failures in an `app.Result` envelope (`isError` plus recovery information in `nextTool` / `recovery`). For example, an unknown field in `tools/call` arguments yields an invalid-arguments envelope. Invalid `tools/call` protocol parameters and unknown tool names yield JSON-RPC errors. `sofarpc_invoke` accepts only the advertised `paramTypes` / `orderedArguments` names — the former `types` / `args` aliases were removed.
 
 The `prompts` capability advertises one user-selected workflow, `sofarpc.invoke_workflow` (the host surfaces it as a slash command or template; it is never auto-executed). Given an `intent` (and optional `server`/`project`/`service`/`method`/`serviceQuery`), it renders the recommended resolve → describe → invoke_plan → invoke path with the failure-recovery contract.
 
 The `resources` capability exposes two read-only resources: `sofarpc://compatibility` — the Java/Hessian2 type support matrix as JSON — and `skill://using-sofarpc/SKILL.md`, the bundled agent skill. The config file itself is deliberately not exposed as a resource because it can carry credential-bearing attachments.
 
-The server also declares the MCP Skills extension (`io.modelcontextprotocol/skills`) and answers `skills/list` and `skills/get`, so a host that supports the extension loads the `using-sofarpc` skill straight from the server, always matching the running binary (Claude Code lists it as `<server>:using-sofarpc`). For hosts without the extension, copy `skills/using-sofarpc/` into the host's skills directory instead; do not keep both, or the skill shows up twice.
+The server also declares the MCP Skills extension (`io.modelcontextprotocol/skills`) and answers `skills/list` and `skills/get`, so a host that supports the extension loads the `using-sofarpc` skill straight from the server, always matching the running binary (Claude Code lists it as `<server>:using-sofarpc`). For other hosts, copy `skills/using-sofarpc/` from the repository at the tag matching your binary into the host's skills directory. Keeping both copies makes the skill appear twice.
 
 The config-write tools (`sofarpc_config_save_*`) accept `dryRun: true` to validate and preview an entry without writing `config.json`. Attachment values are stored verbatim in the local config (treat them as credentials) and are always redacted in tool/resource output. Start the server with `--disable-config-write` to drop all four config-write tools.
 
